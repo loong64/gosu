@@ -1,0 +1,105 @@
+on:
+  push:
+    branches:
+      - master
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+name: Checkout and Create Release Version
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+      build: ${{ steps.check-build.outputs.build }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Version
+        id: get-version
+        run: |
+          version=$(curl -s 'https://api.github.com/repos/tianon/gosu/releases/latest' | jq -r ".tag_name")
+          echo "Current Version: ${version}"
+          if [ -z "${version}" ] || [ "${version}" == "null" ]; then
+            echo "Failed to get version"
+            exit 1
+          fi
+          echo "version=${version}" >> $GITHUB_ENV
+          echo "version=${version}" >> $GITHUB_OUTPUT
+
+      - name: Check Release
+        id: check-release
+        run: |
+          gh release view ${{ env.version }} -R ${{ github.repository }} >/dev/null 2>&1 || echo "create=1" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Build
+        id: check-build
+        run: |
+          gh release view ${{ env.version }} -R ${{ github.repository }} | grep gosu-${{ env.version }}-linux-386.tar.gz >/dev/null 2>&1 || echo "build=1" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Tag
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Release ${{ env.version }}" || echo "No changes to commit"
+          git tag -a "${{ env.version }}" -m "Release ${{ env.version }}" || true
+          git push origin "${{ env.version }}" || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        if: steps.check-release.outputs.create == 1
+        run: |
+          gh release create ${{ env.version }} --notes "Release ${{ env.version }}" -R ${{ github.repository }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    needs: check
+    runs-on: ubuntu-latest
+    if: needs.check.outputs.build == 1
+    env:
+      version: ${{ needs.check.outputs.version }}
+    steps:
+      - name: Check Version
+        run: |
+          echo "Current Version: ${version}"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          repository: tianon/gosu
+          ref: ${{ env.version }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Get File
+        run: |
+          wget -O ../goreleaser.test https://github.com/${{ github.repository }}/raw/refs/heads/master/.goreleaser.yaml
+
+      - name: Build Binary
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --config ../goreleaser.test --skip=publish --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upgrade Release
+        run: |
+          gh release upload ${{ env.version }} dist/*.tar.gz -R ${{ github.repository }}
+          gh release upload ${{ env.version }} dist/*.txt -R ${{ github.repository }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
