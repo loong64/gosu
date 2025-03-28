@@ -135,12 +135,11 @@ jobs:
           EOF
           gpg-connect-agent reloadagent /bye
 
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - name: Build Binary
         run: |
-          docker buildx build --platform linux/loong64 --build-arg VERSION=${{ env.version }} -t gosu . --load
+          docker build --build-arg VERSION=${{ env.version }} -t gosu .
 
           cd dist
           rm -f gosu* SHA256SUMS*

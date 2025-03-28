@@ -1,4 +1,6 @@
-FROM ghcr.io/loong64/golang:1.24-trixie
+ARG BASE_IMAGE=golang:1.24-bookworm
+
+FROM ${BASE_IMAGE}
 
 RUN set -eux; \
 	apt-get update; \
