@@ -1,7 +1,4 @@
 on:
-  push:
-    branches:
-      - master
   schedule:
     - cron: '0 1 * * *'
   workflow_dispatch:
@@ -21,7 +18,7 @@ jobs:
       - name: Check Version
         id: get-version
         run: |
-          version=$(curl -s 'https://api.github.com/repos/tianon/gosu/releases/latest' | jq -r ".tag_name")
+          version=$(curl -sSL 'https://api.github.com/repos/tianon/gosu/releases/latest' | jq -r ".tag_name")
           echo "Current Version: ${version}"
           if [ -z "${version}" ] || [ "${version}" == "null" ]; then
             echo "Failed to get version"
@@ -101,5 +98,75 @@ jobs:
         run: |
           gh release upload ${{ env.version }} dist/*.tar.gz -R ${{ github.repository }}
           gh release upload ${{ env.version }} dist/*.txt -R ${{ github.repository }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  binaries:
+    needs: check
+    runs-on: ubuntu-latest
+    if: needs.check.outputs.build == 1
+    env:
+      version: ${{ needs.check.outputs.version }}
+    steps:
+      - name: Check Version
+        run: |
+          echo "Current Version: ${version}"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Import GPG key
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+
+      - name: Prepare scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y reprepro gnupg-agent
+          mkdir -p dist
+
+          echo > ~/.gnupg/gpg-agent.conf <<EOF
+          max-cache-ttl 60480000
+          default-cache-ttl 60480000
+          allow-preset-passphrase
+          EOF
+          gpg-connect-agent reloadagent /bye
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Binary
+        run: |
+          docker buildx build --platform linux/loong64 --build-arg VERSION=${{ env.version }} -t gosu . --load
+
+          cd dist
+          rm -f gosu* SHA256SUMS*
+          docker run --rm gosu sh -c 'cd /go/bin && tar -c gosu*' | tar -xv
+          sha256sum gosu* | tee SHA256SUMS
+          file gosu*
+          ls -lFh gosu* SHA256SUMS*
+
+          "./gosu-$(dpkg --print-architecture)" --help
+
+      - name: Sign Binary
+        run: |
+          KEYGRIP=$(gpg -K --with-keygrip | grep Keygrip | head -1 | awk '{print $3}')
+          /usr/lib/gnupg2/gpg-preset-passphrase --preset "$KEYGRIP" <<< "${{ secrets.PASSPHRASE }}"
+
+          cd dist
+          rm -f gosu*.asc SHA256SUMS.asc
+          for f in gosu*; do
+            gpg --output "$f.asc" --detach-sign "$f"
+          done
+          sha256sum gosu* > SHA256SUMS
+          gpg --output SHA256SUMS.asc --detach-sign SHA256SUMS
+          ls -lFh gosu* SHA256SUMS*
+
+      - name: Upgrade Release
+        run: |
+          gh release upload ${{ env.version }} dist/* -R ${{ github.repository }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
