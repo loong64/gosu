@@ -7,12 +7,11 @@ RUN set -eux; \
 	apt-get install -y --no-install-recommends \
 		arch-test \
 		file \
-		patch \
 	; \
 	rm -rf /var/lib/apt/lists/*
 
 # note: we cannot add "-s" here because then "govulncheck" does not work (see SECURITY.md); the ~0.2MiB increase (as of 2022-12-16, Go 1.18) is worth it
-ENV BUILD_FLAGS="-v -ldflags '-d -w'"
+ENV BUILD_FLAGS="-v -trimpath -ldflags '-d -w'"
 
 RUN set -eux; \
 	{ \
@@ -42,8 +41,7 @@ RUN set -eux; \
     git clone --depth 1 -b ${VERSION} https://github.com/tianon/gosu ${WORKDIR}
 
 RUN set -eux; \
-	go mod download; \
-	go mod verify
+	go mod download
 
 # gosu-$(dpkg --print-architecture)
 RUN ARCH=amd64    GOARCH=amd64       gosu-build-and-test.sh
